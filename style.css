@@ -560,3 +560,38 @@ html.lenis body { height: auto; }
     max-width: 22rem;
   }
 }
+
+/* ---------- mobile smoothness pass (owner order: mobile-friendly) ----------
+   1) viewport-fit + safe areas (notch), 2) no pull-to-refresh interference,
+   3) tap highlight off, 4) text over video gets a grade scrim, 5) footer
+   CTA thumb-reach, 6) film sections shorten slightly (less scroll on touch) */
+@media (max-width: 760px) {
+  :root { --gutter: clamp(1rem, 5.5vw, 2rem); }
+
+  html, body {
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: none;         /* no bounce/rubber-band flashes */
+  }
+
+  /* shorter film: ~7.6 viewports of scroll on touch (was ~10.4) */
+  #act-hero           { height: 105vh; }
+  #act-parts          { height: 140vh; }
+  #act-chassis-wheels { height: 165vh; }
+  #act-engine         { height: 190vh; }
+  #act-reveal         { height: 175vh; }
+
+  .copy {
+    bottom: calc(22vh + env(safe-area-inset-bottom, 0px));
+  }
+  .copy::before {
+    inset: -14% -8%;                     /* grade scrim behind text (video readability) */
+  }
+
+  /* type-scale tightening + sub line-clamp for one-glance reads */
+  h1 { font-size: clamp(2.6rem, 12vw, 4.6rem); }
+  h2 { font-size: clamp(1.75rem, 7vw, 2.6rem); }
+  .sub { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+  /* footer finale: thumb-zone */
+  .site-foot { padding-bottom: calc(1.4rem + env(safe-area-inset-bottom, 0px)); }
+}

@@ -61,20 +61,38 @@
   // never shows complete before the final act, and the shared boundary
   // frames keep the reel flowing across act edges.
   /* ============================================================================
-     REEL SOURCES — per act, real frame sequences live in /assets/seq-N/
-     (extracted from the vicsee Veo renders at 24fps, 1280w, q90, <=1MB).
-     ACT_SEQS maps reelCode -> { dir, first, count } (files f_0001.jpg...).
-     STILLS keep the K-code pool as the instant-paint base layer while the
-     act's frame sequence streams in; any act whose sequence fails falls
-     back to the K-code still for that act range (graceful, never blank).
+     REEL SOURCES — per act, real frame sequences (20fps extract, 8s x 4 reels).
+     Two cuts ship: DESKTOP = 1280w reels in /assets/seq-1..4 (162 frames each,
+     full-length); MOBILE = 720w reels in /assets/seq-1m..4m (162 frames each).
+     Act mapping is CONTIGUOUS: A1 = seq1[1..162] (parts fuse), A2 = seq2 full
+     (chassis lands), A3 = seq3 full (stands: wheels fly in), A4 = seq4 first
+     half (cobra + wrap), A5 = seq4 second half (hood close + ignite finale).
+     STILLS keep the K-code pool as the instant-paint base layer; any act whose
+     sequence fails falls back to the K-code still (graceful, never blank).
      ========================================================================= */
-  var ACT_SEQS = {
-    A1: { dir: 'https://maheshkoriacourse.github.io/mustang-stealth-built/assets/seq-1', first: 1,   count: 162 }, // 20fps reel: parts breathe; floor pan + suspension fuse
-    A2: { dir: 'https://maheshkoriacourse.github.io/mustang-stealth-built/assets/seq-1', first: 163, count: 162 }, // 20fps reel: array lands as the bare chassis (K3 end-state)
-    A3: { dir: 'https://maheshkoriacourse.github.io/mustang-stealth-built/assets/seq-3', first: 1,   count: 162 }, // 20fps reel: it stands: 4 wheels fly in (K3->K4 story)
-    A4: { dir: 'https://maheshkoriacourse.github.io/mustang-stealth-built/assets/seq-3', first: 163, count: 162 }, // 20fps reel: cobra + cockpit + body wrap (K4 -> K6b)
-    A5: { dir: 'https://maheshkoriacourse.github.io/mustang-stealth-built/assets/seq-4', first: 1,   count: 324 }  // 20fps reel x2: hood closes, lights ignite, rear hero — COMPLETE
+  function cutWidth() {
+    return (win.innerWidth || doc.documentElement.clientWidth || 1024) < 760 ? 'm' : '';
+  }
+  var reelDirs = {
+    '':  { A1: ['assets/seq-1', 1,   162], A2: ['assets/seq-2', 1,   162], A3: ['assets/seq-3', 1,   162], A4: ['assets/seq-4', 1,   81], A5: ['assets/seq-4', 81, 81] },
+    'm': { A1: ['assets/seq-1m', 1,  162], A2: ['assets/seq-2m', 1,  162], A3: ['assets/seq-3m', 1,  162], A4: ['assets/seq-4m', 1,   81], A5: ['assets/seq-4m', 81, 81] }
   };
+  function actSeqs() {
+    return reelDirs[cutWidth()];
+  }
+  var ACT_SEQS = {}; // built fresh from actSeqs() at boot/resize
+
+  function buildActSeqs() {
+    var src = actSeqs();
+    ACT_SEQS = {
+      A1: { dir: src.A1[0], first: src.A1[1], count: src.A1[2] },
+      A2: { dir: src.A2[0], first: src.A2[1], count: src.A2[2] },
+      A3: { dir: src.A3[0], first: src.A3[1], count: src.A3[2] },
+      A4: { dir: src.A4[0], first: src.A4[1], count: src.A4[2] },
+      A5: { dir: src.A5[0], first: src.A5[1], count: src.A5[2] }
+    };
+  }
+  buildActSeqs();
   // Stills ladder retained as the instant base layer + reduced-motion + fallback
   var ACTS = [
     { selector: '#act-hero',           frames: ['K2'] },               // floating parts array — the car is nowhere yet
@@ -202,39 +220,54 @@
   function cleTimeoutSafe(handle) { clearTimeout(handle); }
 
   /* ---------- frame-sequence preload (background, after the still gate) ---------- */
+  // Mobile-grade: SEQUENTIAL queue in act-priority order (max ~6 images at once),
+  // never the 648-parallel blast — small devices stay smooth while streaming.
 
   function preloadSeq(actKey, seq) {
     var arr = new Array(seq.count);
     for (var i = 0; i < seq.count; i++) arr[i] = null;
     seqImages[actKey] = arr;
-    var loaded = 0;
     return new Promise(function (resolve) {
-      for (var i = 0; i < seq.count; i++) {
-        (function (idx) {
-          var img = new Image();
-          img.decoding = 'async';
-          var done = false;
-          function finish(imgRef) {
-            if (done) return;
-            done = true;
-            arr[idx] = imgRef || null;
-            loaded++;
-            if (loaded >= seq.count) resolve();
-          }
-          var failsafe = setTimeout(function () { finish(img.complete && img.naturalWidth ? img : null); }, 25000);
-          img.onload = function () { clearTimeout(failsafe); finish(img); };
-          img.onerror = function () { clearTimeout(failsafe); finish(null); };
-          img.src = seqPath(actKey, idx);
-        })(i);
+      var loaded = 0;
+      var next = 0;
+      var PARALLEL = 6;
+      function pump() {
+        while (next < seq.count && next - loaded < PARALLEL) {
+          (function (idx) {
+            var img = new Image();
+            img.decoding = 'async';
+            var done = false;
+            function finish(imgRef) {
+              if (done) return;
+              done = true;
+              arr[idx] = imgRef || null;
+              loaded++;
+              if (gateDone) paintOnce(); // new frames stream in live as they land
+              if (loaded >= seq.count) resolve();
+              else pump();
+            }
+            var failsafe = setTimeout(function () { finish(img.complete && img.naturalWidth ? img : null); }, 20000);
+            img.onload = function () { clearTimeout(failsafe); finish(img); };
+            img.onerror = function () { clearTimeout(failsafe); finish(null); };
+            img.src = seqPath(actKey, idx);
+          })(next);
+          next++;
+        }
       }
+      pump();
     });
   }
 
   function startSeqPreload() {
-    var keys = Object.keys(ACT_SEQS);
-    Promise.all(keys.map(function (k) { return preloadSeq(k, ACT_SEQS[k]); })).then(function () {
+    buildActSeqs(); // fresh mapping for the current cut
+    var keys = ['A1', 'A2', 'A3', 'A4', 'A5'];
+    // acts stream one-after-another (A1 first) — instant reels where the user starts
+    var p = Promise.resolve();
+    keys.forEach(function (k) {
+      p = p.then(function () { return preloadSeq(k, ACT_SEQS[k]); });
+    });
+    p.then(function () {
       // any act whose reel failed stays on its still ladder (paintFilm already falls back)
-      if (gateDone) paintOnce();
       if (win.ScrollTrigger) win.ScrollTrigger.refresh();
     });
   }
@@ -308,9 +341,17 @@
 
   function sizeCanvas() {
     if (!canvas) return;
-    dpr = clamp(win.devicePixelRatio || 1, 1, 2); // DPR cap per spec
-    rectW = win.innerWidth;
-    rectH = win.innerHeight;
+    // mobile-friendly DPR cap: phones get 1.5 (crisp but lighter fill-rate),
+    // desktop/small laptops keep up to 2.
+    var dprCap = (cutWidth() === 'm') ? 1.5 : 2;
+    dpr = clamp(win.devicePixelRatio || 1, 1, dprCap);
+    // honor viewport-fit=cover (notch) & URL-bar changes: use visualViewport when present
+    var vv = win.visualViewport;
+    if (vv && vv.width) { rectW = Math.round(vv.width); rectH = Math.round(vv.height); }
+    else {
+      rectW = win.innerWidth;
+      rectH = win.innerHeight;
+    }
     canvas.width  = Math.max(1, Math.round(rectW * dpr));
     canvas.height = Math.max(1, Math.round(rectH * dpr));
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -553,10 +594,12 @@
     win.gsap.registerPlugin(win.ScrollTrigger || function () {});
 
     var lenis = new win.Lenis({
-      duration: 1.1,       // build spec: 1.1
+      duration: (cutWidth() === 'm') ? 0.85 : 1.1,  // build spec 1.1; lighter on touch (native feel)
       smoothWheel: true,
+      smoothTouch: false,    // DON'T hijack touch scroll — native momentum stays (mobile-smooth fix)
       wheelMultiplier: 1,
-      touchMultiplier: 1.4
+      touchMultiplier: 1.4,
+      easing: function (t) { return Math.min(1, 1.001 - Math.pow(2, -10 * t)); }
     });
 
     // canonical Lenis <-> GSAP handshake: Lenis drives, the ticker breathes
@@ -611,9 +654,17 @@
 
   /* ---------- resize ---------- */
 
+  var currentCut = cutWidth(); // '' desktop | 'm' mobile
   function onResize() {
     sizeCanvas();
     measure();
+    var cut = cutWidth();
+    if (cut !== currentCut) {
+      // crossed the 760px breakpoint: switch reel cut and re-stream that cut
+      currentCut = cut;
+      seqImages = {}; // drop the other cut's frames; reels re-stream on demand
+      startSeqPreload();
+    }
     paintOnce();
   }
 
