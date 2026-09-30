@@ -69,11 +69,11 @@
      back to the K-code still for that act range (graceful, never blank).
      ========================================================================= */
   var ACT_SEQS = {
-    A1: { dir: 'assets/seq-1', first: 1,   count: 96  }, // parts breathe; floor pan + suspension fuse
-    A2: { dir: 'assets/seq-1', first: 97,  count: 96  }, // array lands as the bare chassis (K3 end-state)
-    A3: { dir: 'assets/seq-3', first: 1,   count: 96  }, // it stands: 4 wheels fly in (K3->K4 story)
-    A4: { dir: 'assets/seq-3', first: 97,  count: 96  }, // cobra + cockpit + body wrap (K4 -> K6b)
-    A5: { dir: 'assets/seq-4', first: 1,   count: 192 }  // hood closes, lights ignite, rear hero — COMPLETE
+    A1: { dir: 'https://maheshkoriacourse.github.io/mustang-stealth-built/assets/seq-1', first: 1,   count: 162 }, // 20fps reel: parts breathe; floor pan + suspension fuse
+    A2: { dir: 'https://maheshkoriacourse.github.io/mustang-stealth-built/assets/seq-1', first: 163, count: 162 }, // 20fps reel: array lands as the bare chassis (K3 end-state)
+    A3: { dir: 'https://maheshkoriacourse.github.io/mustang-stealth-built/assets/seq-3', first: 1,   count: 162 }, // 20fps reel: it stands: 4 wheels fly in (K3->K4 story)
+    A4: { dir: 'https://maheshkoriacourse.github.io/mustang-stealth-built/assets/seq-3', first: 163, count: 162 }, // 20fps reel: cobra + cockpit + body wrap (K4 -> K6b)
+    A5: { dir: 'https://maheshkoriacourse.github.io/mustang-stealth-built/assets/seq-4', first: 1,   count: 324 }  // 20fps reel x2: hood closes, lights ignite, rear hero — COMPLETE
   };
   // Stills ladder retained as the instant base layer + reduced-motion + fallback
   var ACTS = [
@@ -113,7 +113,7 @@
   }
 
   var STILLS = ['K2', 'K3', 'K4', 'K5b', 'K6b', 'K6', 'K8']; // reel codes — K1/K5/K7 stay on disk, out of the cut
-  function stillPath(code) { return 'assets/stills/' + code + '.png'; }
+  function stillPath(code) { return 'https://maheshkoriacourse.github.io/mustang-stealth-built/assets/stills/' + code + '.png'; }
 
   /* ---------- frame-sequence pool (real Veo frames) ---------- */
 
