@@ -109,7 +109,7 @@
   function crossfadeWindow(codes, t) {
     if (CROSSFADE[codes[t]]) return CROSSFADE[codes[t]];
     var boundary = (t + 1) / codes.length;
-    return [boundary + 0.02, boundary + 0.16];
+    return [boundary + 0.01, boundary + 0.10];
   }
 
   var STILLS = ['K2', 'K3', 'K4', 'K5b', 'K6b', 'K6', 'K8']; // reel codes — K1/K5/K7 stay on disk, out of the cut
