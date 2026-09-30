@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="1968 Ford Mustang Fastback. Scroll to assemble the matte-black American muscle legend part by part on the salt flat.">
+  <title>1968 Mustang — Stealth Built</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="loader">
+    <div class="loader-word">ASSEMBLING</div>
+    <div class="loader-bar"><span id="loader-fill"></span></div>
+    <div class="loader-note">loading the legend</div>
+  </div>
+
+  <canvas id="stage"></canvas>
+
+  <!-- Fixed windowed chapter copy. Blocks are placed by class inside this
+       overlay and driven per frame by app.js from their act-local data-win
+       envelope (inStart,inEnd,outStart,outEnd) against the measured act spans. -->
+  <div id="overlay">
+
+    <div class="copy a1" data-sc-copy data-act="1" data-win="0.02,0.10,0.80,0.92">
+      <p class="eyebrow">CHAPTER 01 — THE MACHINE WAITS</p>
+      <h1>1968. RESURRECTED.</h1>
+      <p class="sub">The American muscle legend returns in stealth. Keep scrolling — the car builds itself.</p>
+    </div>
+
+    <div class="copy a2" data-sc-copy data-act="2" data-win="0.06,0.16,0.36,0.46">
+      <p class="eyebrow">CHAPTER 02 — PARTS ARRIVE</p>
+      <h2>Every part earns its place.</h2>
+      <p class="sub">Chassis, body shell, 428 Cobra Jet, wheels, doors, seats. The scroll is the assembly line.</p>
+    </div>
+
+    <div class="copy a3 s1" data-sc-copy data-act="3" data-win="0.08,0.18,0.38,0.47">
+      <p class="eyebrow">CHAPTER 03 — BARE BONES TO WHEELS</p>
+      <h2>First, the bones.</h2>
+      <p class="sub">A bare rolling chassis, alone on the salt.</p>
+    </div>
+    <div class="copy a3 s2" data-sc-copy data-act="3" data-win="0.58,0.68,0.92,1.00">
+      <h2>Then the grip.</h2>
+      <p class="sub">Styled-steel wheels land one by one — it stands on its own for the first time.</p>
+    </div>
+
+    <div class="copy a4" data-sc-copy data-act="4" data-win="0.40,0.50,0.62,0.71">
+      <p class="eyebrow">CHAPTER 04 — THE COBRA WAKES</p>
+      <h2>THE COBRA GOES IN.</h2>
+      <p class="sub">428 Cobra Jet &middot; 7.0 L V8 &middot; 335 hp SAE gross &middot; 8.7:1 compression &middot; dual exhaust</p>
+    </div>
+
+    <div class="copy a5 s1" data-sc-copy data-act="5" data-win="0.38,0.48,0.60,0.68">
+      <p class="eyebrow">CHAPTER 05 — IGNITION</p>
+      <h2 class="big">THE COBRA WAKES.</h2>
+      <p class="sub">Hood closes. Lights ignite. The legend takes its first breath.</p>
+    </div>
+    <div class="copy a5 s2" data-sc-copy data-act="5" data-win="0.74,0.84,0.99,1.00">
+      <h2>Stealth, assembled.</h2>
+      <p class="sub">1968 Fastback &middot; Stealth Matte Black &middot; black leather cabin &middot; every part earned its place.</p>
+      <a class="cta" href="mailto:launch@stealthbuilt.site?subject=Mustang%20Launch%20Registration">Register for launch</a>
+    </div>
+
+  </div>
+
+  <header class="site-head">
+    <div class="brand">STEALTH BUILT</div>
+    <div class="head-right">1968 FASTBACK &middot; SALT FLAT PROVING GROUND</div>
+    <div class="progress-rail"><span id="progress-fill"></span><i class="tick" style="left:20%"></i><i class="tick" style="left:40%"></i><i class="tick" style="left:60%"></i><i class="tick" style="left:80%"></i></div>
+    <div class="head-right2">428 COBRA JET &middot; 335 HP</div>
+  </header>
+
+  <!-- Film timing spacers: their heights and order are the reel's cuts.
+       app.js measures them; the copy lives in #overlay, not in here. -->
+  <main>
+    <section class="act" id="act-hero" data-act="1"></section>
+    <section class="act" id="act-parts" data-act="2"></section>
+    <section class="act" id="act-chassis-wheels" data-act="3"></section>
+    <section class="act" id="act-engine" data-act="4"></section>
+    <section class="act" id="act-reveal" data-act="5"></section>
+  </main>
+
+  <footer class="site-foot">A concept film by Stealth Built — the matte-black legend, assembled by your scroll.</footer>
+
+  <noscript><div class="noscript-card">This experience scrolls a car into existence. Enable JavaScript to watch the legend assemble.</div></noscript>
+  <script src="vendor/gsap.min.js"></script>
+  <script src="vendor/ScrollTrigger.min.js"></script>
+  <script src="vendor/lenis.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,562 @@
+/* ============================================================
+   STEALTH BUILT — 1968 Ford Mustang Fastback
+   Cinematic scroll-assembly launch site
+   Matte black car · Bonneville salt flat · golden hour
+   ------------------------------------------------------------
+   Layers (fixed film behind, fixed windowed copy over it):
+     #loader     z100  preloader curtain
+     header      z10   brand + progress rail
+     #overlay    z2    fixed chapter copy — app.js drives opacity
+     main .act   z2    empty scroll spacers — the film's cuts only
+     body::after z1    fixed cinematic vignette (over the film only)
+     #stage      z0    canvas film (painted by app.js)
+   JS contract honored:
+     body.no-scroll        -> scroll locked during preload
+     #loader.is-loaded     -> curtain fades via opacity .6s
+     .copy { opacity:0 }   -> opacity driven per-frame by app.js from
+                              each block's data-win envelope; .live is
+                              toggled over 0.5 so only shown copy takes
+                              pointer events
+     #progress-fill width  -> set in % by app.js
+   ============================================================ */
+
+/* ---------- tokens ---------- */
+:root {
+  /* palette: matte black ground, salt light, golden-hour accent */
+  --ink:        #060606;
+  --ink-2:      #0b0b0d;
+  --ink-soft:   rgba(11, 11, 13, 0.72);
+  --salt:       #ece7db;
+  --salt-dim:   rgba(236, 231, 219, 0.64);
+  --salt-faint: rgba(236, 231, 219, 0.38);
+  --gold:       #e3a43b;
+  --gold-hot:   #f4c264;
+  --gold-deep:  #8a5f1d;
+  --ember:      #c25a2e;
+  --hair:       rgba(236, 231, 219, 0.16);
+
+  --font-display: 'Anton', 'Arial Narrow', Impact, sans-serif;
+  --font-body: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+
+  --gutter: clamp(1.25rem, 4.5vw, 5rem);
+  --copy-w: 34rem;
+
+  --shadow-copy: 0 2px 46px rgba(0, 0, 0, 0.62), 0 1px 3px rgba(0, 0, 0, 0.85);
+  --glow-gold: 0 0 14px rgba(227, 164, 59, 0.55);
+}
+
+/* ---------- reset ---------- */
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scrollbar-width: thin;
+  scrollbar-color: #26262a transparent;
+}
+
+body {
+  background: var(--ink);
+  color: var(--salt);
+  font-family: var(--font-body);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.6;
+  min-height: 100vh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* scroll lock while the film is preloading — app.js removes this class */
+body.no-scroll {
+  overflow: hidden;
+}
+
+::selection {
+  background: var(--gold);
+  color: var(--ink);
+}
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(227, 164, 59, 0.45); border-radius: 3px; }
+
+a:focus-visible {
+  outline: 1px solid var(--gold);
+  outline-offset: 4px;
+}
+
+/* ---------- fixed film stage (canvas painted by app.js) ---------- */
+#stage {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  background: var(--ink);
+  display: block;
+  pointer-events: none;
+}
+
+/* ---------- fixed cinematic vignette over the film ---------- */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 90% at 50% 42%, transparent 46%, rgba(4, 4, 4, 0.5) 100%),
+    linear-gradient(180deg, rgba(4, 4, 4, 0.35) 0%, transparent 18%, transparent 82%, rgba(4, 4, 4, 0.55) 100%);
+}
+
+/* ---------- preloader curtain ---------- */
+#loader {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.6rem;
+  background:
+    radial-gradient(90% 70% at 50% 40%, #101012 0%, var(--ink) 68%);
+  text-align: center;
+  transition: opacity .6s;
+}
+
+/* app.js adds .is-loaded when preloading finishes */
+#loader.is-loaded {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.loader-word {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(1.9rem, 5vw, 3.4rem);
+  letter-spacing: 0.42em;
+  text-indent: 0.42em; /* optical: recenters tracked-out caps */
+  color: var(--salt);
+  text-transform: uppercase;
+  animation: word-sheen 2.6s linear infinite;
+}
+
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .loader-word {
+    background: linear-gradient(100deg, #8c877b 0%, var(--salt) 42%, #6f6a5f 55%, var(--salt) 72%);
+    background-size: 220% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}
+
+@keyframes word-sheen {
+  from { background-position: 220% 0; }
+  to   { background-position: -220% 0; }
+}
+
+.loader-bar {
+  position: relative;
+  width: min(320px, 62vw);
+  height: 2px;
+  background: rgba(236, 231, 219, 0.14);
+  overflow: hidden;
+}
+
+#loader-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: 0;               /* app.js drives width in % */
+  height: 100%;
+  background: linear-gradient(90deg, var(--gold-deep), var(--gold), var(--gold-hot));
+  box-shadow: var(--glow-gold);
+  transition: width .25s ease-out;
+}
+
+.loader-note {
+  font-size: 0.6rem;
+  font-weight: 500;
+  letter-spacing: 0.34em;
+  text-indent: 0.34em;
+  text-transform: uppercase;
+  color: var(--salt-faint);
+  animation: note-pulse 2.8s ease-in-out infinite;
+}
+
+@keyframes note-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 0.85; }
+}
+
+/* ---------- masthead ---------- */
+.site-head {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: clamp(0.9rem, 2.4vw, 2.4rem);
+  padding: calc(var(--gutter) * 0.42) var(--gutter);
+  /* scrim so chrome stays legible over a bright salt sky */
+  background: linear-gradient(180deg, rgba(5, 5, 5, 0.68) 0%, transparent 100%);
+  pointer-events: none;
+}
+
+.brand {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 0.95rem;
+  letter-spacing: 0.34em;
+  color: var(--salt);
+  white-space: nowrap;
+}
+
+.head-right {
+  font-size: 0.58rem;
+  font-weight: 500;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--salt-dim);
+  white-space: nowrap;
+}
+
+.head-right2 {
+  font-size: 0.58rem;
+  font-weight: 500;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: rgba(227, 164, 59, 0.75);
+  white-space: nowrap;
+}
+
+.progress-rail {
+  position: relative;
+  margin-left: auto;
+  width: clamp(110px, 16vw, 230px);
+  height: 2px;
+  background: rgba(236, 231, 219, 0.14);
+}
+
+#progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: 0;               /* app.js drives width in % */
+  height: 100%;
+  background: linear-gradient(90deg, var(--gold-deep), var(--gold), var(--gold-hot));
+  box-shadow: var(--glow-gold);
+}
+
+.tick {
+  position: absolute;
+  top: -3px;
+  width: 1px;
+  height: 8px;
+  background: rgba(236, 231, 219, 0.32);
+  /* left offsets come inline from index.html (20/40/60/80%) */
+}
+
+/* ---------- chapters: empty scroll spacers (the film's cuts) ----------
+   Copy lives fixed in #overlay; these sections only exist so app.js can
+   measure each act's live span — their order + heights are the edit table. */
+main {
+  position: relative;
+  z-index: 2;
+}
+
+.act {
+  position: relative;
+  pointer-events: none; /* spacers never catch events */
+}
+
+/* film section heights: ≈ 10.4 viewports + footer */
+#act-hero           { height: 130vh; }
+#act-parts          { height: 180vh; }
+#act-chassis-wheels { height: 220vh; }
+#act-engine         { height: 260vh; }
+#act-reveal         { height: 240vh; }
+
+/* ---------- fixed windowed chapter copy (#overlay) ----------
+   Each block is viewport-placed by class and faded per frame by app.js
+   from its act-local data-win envelope (in / hold / out) measured against
+   the real act spans. .live gates pointer events so the finale CTA is
+   clickable only while its block is actually on screen. */
+#overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.copy {
+  position: absolute;
+  max-width: var(--copy-w);
+  opacity: 0;              /* contract: JS drives opacity in rAF */
+  will-change: opacity, transform;
+}
+
+.copy.live { pointer-events: auto; }
+
+/* soft scrim pocket behind copy so it reads over any frame */
+.copy::before {
+  content: "";
+  position: absolute;
+  inset: -16% -24%;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(closest-side, rgba(5, 5, 5, 0.4), transparent 76%);
+}
+
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin: 0 0 1.15rem;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--gold);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.7);
+}
+
+.eyebrow::before {
+  content: "";
+  width: 2.6rem;
+  height: 1px;
+  flex: none;
+  background: linear-gradient(90deg, var(--gold), transparent);
+}
+
+h1,
+h2 {
+  margin: 0 0 1.2rem;
+  font-family: var(--font-display);
+  font-weight: 400;
+  line-height: 0.95;
+  letter-spacing: 0.012em;
+  text-transform: uppercase;
+  text-shadow: var(--shadow-copy);
+}
+
+h1 {
+  font-size: clamp(3.4rem, 10.5vw, 9.5rem);
+}
+
+h2 {
+  font-size: clamp(2.05rem, 5vw, 3.9rem);
+}
+
+/* ignition — oversized, lit by the headlight flare */
+h2.big {
+  font-size: clamp(2.8rem, 9vw, 8rem);
+  line-height: 0.9;
+  color: var(--gold-hot);
+  text-shadow: 0 3px 60px rgba(0, 0, 0, 0.7), 0 0 44px rgba(227, 164, 59, 0.28);
+}
+
+.sub {
+  margin: 0;
+  max-width: 42ch;
+  font-size: clamp(0.95rem, 1.05vw, 1.08rem);
+  line-height: 1.7;
+  color: var(--salt-dim);
+  text-shadow: var(--shadow-copy);
+}
+
+/* ch01 — centered over the floating parts array */
+.a1 {
+  top: 40%;
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  text-align: center;
+}
+
+.a1 .eyebrow { justify-content: center; }
+
+.a1 .eyebrow::after {
+  content: "";
+  width: 2.6rem;
+  height: 1px;
+  flex: none;
+  background: linear-gradient(270deg, var(--gold), transparent);
+}
+
+/* ch02 — parts converge; copy docks bottom-left */
+.a2 {
+  left: var(--gutter);
+  bottom: 18vh;
+}
+
+/* ch03 — two beats on opposite edges of the long build chapter */
+.a3.s1 {
+  left: var(--gutter);
+  top: 24vh;
+}
+
+.a3.s2 {
+  right: var(--gutter);
+  bottom: 18vh;
+  text-align: right;
+}
+
+.a3.s2 .sub { margin-left: auto; }
+
+/* ch04 — the cobra seats; copy rides left-center */
+.a4 {
+  left: var(--gutter);
+  top: 44%;
+}
+
+/* ch05 s1 — ignition beat over the flare, bottom-left */
+.a5.s1 {
+  left: var(--gutter);
+  bottom: 16vh;
+}
+
+/* ch05 s2 — the assembled legend + CTA, left-center */
+.a5.s2 {
+  left: var(--gutter);
+  top: 44%;
+}
+
+/* ---------- call to action ---------- */
+.cta {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-top: 2.1rem;
+  padding: 1rem 2.4rem;
+  border: 1px solid var(--gold);
+  color: var(--gold-hot);
+  font-family: var(--font-body);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.3em;
+  text-indent: 0.15em;
+  text-transform: uppercase;
+  text-decoration: none;
+  background: transparent;
+  transition: color .35s ease, background-color .35s ease, border-color .35s ease;
+}
+
+.cta:hover,
+.cta:focus-visible {
+  color: var(--ink);
+  background: var(--gold);
+  border-color: var(--gold-hot);
+}
+
+/* ---------- footer ---------- */
+.site-foot {
+  position: relative;
+  z-index: 2;
+  padding: 2.4rem var(--gutter) 3rem;
+  text-align: center;
+  font-size: 0.6rem;
+  font-weight: 500;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--salt-faint);
+  background: linear-gradient(180deg, transparent, rgba(5, 5, 5, 0.88) 55%);
+}
+
+/* ---------- no-JS notice ---------- */
+.noscript-card {
+  position: fixed;
+  z-index: 60;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: min(30rem, calc(100vw - 3rem));
+  padding: 1.6rem 2rem;
+  border: 1px solid var(--hair);
+  background: var(--ink-soft);
+  color: var(--salt);
+  font-size: 0.86rem;
+  line-height: 1.65;
+  text-align: center;
+}
+
+/* ---------- lenis smooth-scroll runtime (recommended styles) ---------- */
+html.lenis,
+html.lenis body { height: auto; }
+
+.lenis.lenis-smooth { scroll-behavior: auto !important; }
+
+.lenis.lenis-smooth [data-lenis-prevent] { overscroll-behavior: contain; }
+
+.lenis.lenis-stopped { overflow: hidden; }
+
+/* ---------- reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+
+  #loader { transition: none; }
+  .loader-word { animation: none; }
+  .loader-note { animation: none; }
+  #loader-fill { transition: none; }
+}
+
+/* ---------- narrow desktop / landscape tablet ---------- */
+@media (max-width: 900px) {
+  .head-right2 { display: none; }
+}
+
+/* ---------- mobile ---------- */
+@media (max-width: 760px) {
+  :root {
+    --gutter: clamp(1.1rem, 6vw, 2rem);
+    --copy-w: 100%;
+  }
+
+  .head-right { display: none; }
+
+  .progress-rail { width: clamp(90px, 26vw, 150px); }
+
+  /* one reading slot per act: blocks in the same act never share a
+     visibility window (disjoint data-win), so they can reuse it */
+  .copy {
+    left: var(--gutter);
+    right: var(--gutter);
+    top: auto;
+    bottom: 26vh;
+    max-width: none;
+    text-align: left;
+  }
+
+  .a1 { top: 38%; }
+
+  .a3.s2 { text-align: left; }
+  .a3.s2 .sub { margin-left: 0; }
+
+  .copy::before { inset: -12% -10%; }
+
+  h1 { font-size: clamp(2.9rem, 13.5vw, 5.2rem); }
+  h2 { font-size: clamp(1.9rem, 7.6vw, 2.9rem); }
+  h2.big { font-size: clamp(2.4rem, 12vw, 4.6rem); }
+
+  .cta {
+    justify-content: center;
+    width: 100%;
+    max-width: 22rem;
+  }
+}
