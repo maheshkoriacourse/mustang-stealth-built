@@ -215,6 +215,7 @@
       return new Promise(function (resolve) {
         var img = new Image();
         img.decoding = 'async';
+        img.crossOrigin = 'anonymous'; // WebGL texImage2D needs CORS-clean images
 
         function settle(ok) {
           if (stills[code]) return resolve(); // already settled
@@ -271,6 +272,7 @@
           (function (idx) {
             var img = new Image();
             img.decoding = 'async';
+            img.crossOrigin = 'anonymous'; // WebGL texImage2D needs CORS-clean images
             var done = false;
             function finish(imgRef) {
               if (done) return;
@@ -303,6 +305,7 @@
         (function (idx) {
           var img = new Image();
           img.decoding = 'async';
+          img.crossOrigin = 'anonymous'; // WebGL texImage2D needs CORS-clean images
           var done = false;
           function finish(imgRef) {
             if (done) return;
