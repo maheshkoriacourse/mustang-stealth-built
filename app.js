@@ -139,7 +139,7 @@
      (desktop: 'assets/seq-1' -> depth 'depth/seq-1'; mobile: 'assets/seq-1m'
      -> 'depth/seq-1m'). 16-bit PNGs get downcast to 8-bit grayscale at load. */
   var stillHost = 'https://maheshkoriacourse.github.io/mustang-stealth-built/';
-  var depthDirBase = stillHost + 'assets/depth/'; // NOTE: served under assets/ — matches deploy bundle
+  var depthDirBase = stillHost + 'assets/depth/';
   function depthDirFor(seqDir) {
     // seqDir 'assets/seq-1' | 'assets/seq-1m' -> 'seq-1' | 'seq-1m'
     var m = seqDir.match(/seq-\d+m?$/);
@@ -456,39 +456,84 @@
     ctx.restore();
   }
 
-  /* ---------- STEALTH 3D (depth-parallax WebGL2) ---------- */
-  var s3d = null;                    // layer handle when live
-  var last3dKey = null;              // avoid re-uploading the same texture pair
-  var px = 0, py = 0, tx = 0, ty = 0; // eased pointer/gyro offset (-1..1)
+  // 2D fallback with the SAME camera choreography: rig=pan, zoom=push
+  function drawRawCam(img, cam) {
+    if (!img || !img.naturalWidth || rectW <= 0) return;
+    var cover = Math.max(rectW / img.naturalWidth, rectH / img.naturalHeight);
+    var zoom = cam.zoom || 1.08;
+    var dw = img.naturalWidth * cover * zoom;
+    var dh = img.naturalHeight * cover * zoom;
+    var cx = rectW / 2 - cam.rigX * rectW;
+    var cy = rectH / 2 - cam.rigY * rectH;
+    ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);
+  }
+
+  /* ---------- STEALTH 3D v2 (depth camera choreography) ----------
+     The scroll IS the drone. Per-act camera paths drive a real virtual camera:
+     push-ins, orbital swings, bank rotation — depth maps make near parts fly
+     more than the sky. 2D users get the same choreography as Ken-Burns+drift. */
+  var s3d = null;
+  var last3dKey = null;
+  var px = 0, py = 0, tx = 0, ty = 0;       // pointer/gyro eased offsets
+  var scrollVel = 0;                          // -1..1 eased scroll-velocity kick
+  var lastProgressForVel = 0;
+
+  // Per-act camera path: f(local) -> {rigX, rigY, parX, parY, rot, zoom}
+  // rig: whole-frame translation; par: depth-gain swing (near flies more);
+  // rot: bank; zoom: push-in. Values in uv units — strong enough to FEEL.
+  var CAM_PATHS = [
+    function (t) { // A1 hero: slow descend + drift right, mild bank
+      return { rigX: lerp(-0.045, 0.045, t), rigY: lerp(0.030, -0.020, t), parX: lerp(-0.050, 0.050, t), parY: lerp(0.030, -0.030, t), rot: lerp(0.052, -0.052, t), zoom: lerp(1.10, 1.16, t) };
+    },
+    function (t) { // A2 parts land: push-in toward the array center
+      return { rigX: lerp(0.040, -0.040, t), rigY: lerp(-0.025, 0.025, t), parX: lerp(0.055, -0.055, t), parY: lerp(-0.030, 0.030, t), rot: lerp(-0.060, 0.060, t), zoom: lerp(1.12, 1.18, t) };
+    },
+    function (t) { // A3 wheels on: orbital swing left->right (feels like circling the chassis)
+      var s = smooth(t);
+      return { rigX: lerp(-0.055, 0.055, s), rigY: lerp(0.010, -0.010, s), parX: lerp(-0.070, 0.070, s), parY: lerp(0.020, -0.020, s), rot: lerp(-0.075, 0.075, s), zoom: lerp(1.11, 1.15, t) };
+    },
+    function (t) { // A4 cobra in: descend + strong push (getting intimate with the engine)
+      return { rigX: lerp(0.030, -0.030, t), rigY: lerp(-0.045, 0.030, t), parX: lerp(0.040, -0.040, t), parY: lerp(-0.060, 0.045, t), rot: lerp(0.065, -0.065, t), zoom: lerp(1.13, 1.19, t) };
+    },
+    function (t) { // A5 reveal: pull-back reveal + final bank right (drone leaves the cobra running)
+      var s = smooth(t);
+      return { rigX: lerp(0.055, -0.055, s), rigY: lerp(0.025, -0.025, s), parX: lerp(0.065, -0.065, s), parY: lerp(0.030, -0.030, s), rot: lerp(0.070, -0.070, s), zoom: lerp(1.19, 1.10, t) };
+    }
+  ];
+
+  function camFor(actIdx, local) {
+    var fn = CAM_PATHS[actIdx] || CAM_PATHS[0];
+    var cam = fn(clamp(local, 0, 1));
+    // pointer/gyro adds to rig (always interactive, even mid-scroll)
+    cam.rigX += px * 0.018;
+    cam.rigY += py * 0.012;
+    // scroll-velocity kick: fast scroll => camera swings (cinematic inertia)
+    cam.rigX += scrollVel * 0.035;
+    cam.rot += scrollVel * 0.045;
+    return cam;
+  }
 
   function init3D() {
     if (reduceMotion) return false;   // calm playback stays 2D
     if (!win.Stealth3D) return false;
     var ok = win.Stealth3D.init(canvas);
     if (!ok) console.warn('[stealth-3d] layer off:', win.Stealth3D.failReason());
-    else console.info('[stealth-3d] depth parallax LIVE');
+    else console.info('[stealth-3d] v2 camera LIVE');
     return ok;
   }
 
-  function draw3D(rgbImg, depthImg) {
+  function draw3D(rgbImg, depthImg, cam) {
     if (!s3d || !win.Stealth3D.isActive()) return false;
     if (!depthImg || !depthImg.naturalWidth) return false; // fall back to 2D till maps land
-    if (!win.Stealth3D.setFrame(rgbImg, draw3DDowncast(depthImg))) return false;
-    // pointer/gyro eased toward target (render() runs each ticker)
-    var zoom = 1.045; // hides displaced edge reveal
-    return win.Stealth3D.render(px * 0.022, py * 0.014, zoom);
+    if (!win.Stealth3D.setFrame(rgbImg, depthImg)) return false;
+    return win.Stealth3D.render(cam);
   }
 
-  var depth8Cache = new WeakMap();
-  function draw3DDowncast(img) { return img; } // 8-bit pngs ship as grayscale imgs already
-
   function watchParallax() {
-    // desktop pointer
     win.addEventListener('pointermove', function (e) {
       tx = (e.clientX / Math.max(1, win.innerWidth)) * 2 - 1;
       ty = (e.clientY / Math.max(1, win.innerHeight)) * 2 - 1;
     }, { passive: true });
-    // mobile gyro (needs https + user gesture on iOS; silent if denied)
     try {
       win.addEventListener('deviceorientation', function (e) {
         if (e.gamma == null || e.beta == null) return;
@@ -498,9 +543,12 @@
     } catch (err) { /* no gyro */ }
   }
 
-  function ease3D() {
-    px += (tx - px) * 0.08;
-    py += (ty - py) * 0.08;
+  function ease3D(dt) {
+    px += (tx - px) * clamp(dt * 5, 0, 1);
+    py += (ty - py) * clamp(dt * 5, 0, 1);
+    var dv = targetProgress - lastProgressForVel;
+    lastProgressForVel += dv * clamp(dt * 6, 0, 1);
+    scrollVel += (clamp(dv * 14, -1, 1) - scrollVel) * clamp(dt * 4, 0, 1);
   }
 
   function drawPlaceholder(code, alpha) {
@@ -550,12 +598,14 @@
     var n = codes.length;
 
     // REAL REEL: if this act's frame sequence is ready, it owns the canvas —
-    // STEALTH 3D (WebGL2 depth parallax) preferred; 2D drawRaw as fallback.
+    // STEALTH 3D v2 flies the per-act camera; 2D drawRaw as fallback.
     var fimg = seqFrameImg(actIdx + 1, local);
     if (fimg) {
       var dimg = depthFrameImg(actIdx + 1, local);
-      if (draw3D(fimg, dimg)) return;
-      drawRaw(fimg, 1);
+      var cam = camFor(actIdx, local);
+      if (draw3D(fimg, dimg, cam)) return;
+      // 2D fallback: same choreography as draw drift (rig -> pan, zoom -> scale)
+      drawRawCam(fimg, cam);
       return;
     }
 
@@ -649,11 +699,11 @@
     curProgress += (targetProgress - curProgress) * clamp(dt * 9, 0, 1);
     if (Math.abs(targetProgress - curProgress) < 0.00008) curProgress = targetProgress;
 
-    // 3D parallax input eases every tick (cheap; also repaints on pointer move)
+    // 3D camera eases every tick; repaint when the camera actually moved
     if (s3d) {
-      ease3D();
-      var moved = Math.abs(tx - px) > 0.002 || Math.abs(ty - py) > 0.002;
-      var key = [curProgress.toFixed(6), moved ? 'p' : 's', rectW, rectH].join('|');
+      ease3D(dt);
+      var camMoved = Math.abs(tx - px) > 0.0015 || Math.abs(ty - py) > 0.0015 || Math.abs(scrollVel) > 0.002;
+      var key = [curProgress.toFixed(6), camMoved ? 'p' : 's', rectW, rectH].join('|');
       if (key !== renderedKey) {
         renderedKey = key;
         paintFilm();

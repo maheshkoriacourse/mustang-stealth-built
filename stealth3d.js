@@ -1,32 +1,33 @@
 /* ============================================================================
-   STEALTH 3D — depth-parallax WebGL2 layer for the 1968 Mustang scroll film
+   STEALTH 3D v2 — depth camera-choreography engine (1968 Mustang scroll film)
    ----------------------------------------------------------------------------
-   Every video frame ships with a Depth-Anything-V2 depth map (same filename,
-   .png, 16-bit, R=normalized depth). This module renders each reel frame
-   with per-pixel displacement driven by pointer (desktop) / gyro (mobile):
-     uv' = (uv - 0.5 - shift*(depth-0.5)*k) * zoom + 0.5
-   The car (near) moves MORE than salt/sky (far) -> real camera-swing 3D
-   while staying photoreal cinematic. Graceful: no WebGL2 -> app.js keeps
-   its 2D canvas path untouched.
+   Every reel frame ships with a Depth-Anything-V2 depth map. app.js flies a
+   VIRTUAL CAMERA per tick and hands it here:
+     rig  vec2  rigid translation of the whole image (uv units)
+     par  vec2  differential parallax gain (multiplied by depth-0.5 in shader)
+     rot  float camera BANK (rotation, near-weighted in shader)
+     zoom float push-in factor (>= 1.06 hides displaced edges)
+   Fragment: uv' = R(rot*(d-0.5)) * ((uv-0.5) - rig - par*(d-0.5)*2.2) * zoom + 0.5
+   Near pixels move/rotate MORE than sky -> scroll itself flies the camera.
 
-   Public API (called by app.js):
-     Stealth3D.init(canvas2d)  -> bool   (true = 3D path active)
-     Stealth3D.setFrame(rgbImg, depthImg)  // upload texture pair for frame
-     Stealth3D.render(shiftX, shiftY, zoom)
-     Stealth3D.isActive()      -> bool
-     Stealth3D.failReason()    -> string for diagnostics
+   API: init(canvas) setFrame(rgb, depth) render(cam) isActive failReason
    ========================================================================= */
 (function (win) {
   'use strict';
 
-  var gl = null;
-  var prog = null;
-  var uni = {};
+  var gl = null, prog = null, uni = {};
   var texColor = null, texDepth = null;
   var canvasRef = null;
-  var frameW = 0, frameH = 0;
-  var active = false;
-  var failReason = '';
+  var glCanvas = null;
+  var active = false, failReason = '';
+  var lastColor = null, lastDepth = null;
+
+  // keep the GL canvas backing store matching the 2D stage (DPR handled by CSS scale)
+  function syncSize() {
+    if (!canvasRef || !glCanvas) return;
+    glCanvas.width = canvasRef.width || 1280;
+    glCanvas.height = canvasRef.height || 720;
+  }
 
   var VERT = [
     'attribute vec2 aPos;',
@@ -43,16 +44,23 @@
     'varying vec2 vUv;',
     'uniform sampler2D uTex;',
     'uniform sampler2D uDepth;',
-    'uniform vec2 uShift;',
+    'uniform vec2 uRig;',
+    'uniform vec2 uPar;',
+    'uniform float uRot;',
     'uniform float uZoom;',
     'void main(){',
     '  vec2 uv = vUv;',
     '  float depth = texture2D(uDepth, uv).r;',
-    '  float depthW = depth - 0.5;',
-    '  vec2 disp = uShift * depthW * 1.45;',
-    '  vec2 uvD = (uv - 0.5 - disp) * uZoom + 0.5;',
-    '  vec4 c = texture2D(uTex, clamp(uvD, 0.002, 0.998));',
-    '  gl_FragColor = vec4(c.rgb, 1.0);',
+    '  float dw = depth - 0.5;',
+    '  float rot = uRot * dw * 1.6;',
+    '  float cs = cos(rot);',
+    '  float sn = sin(rot);',
+    '  vec2 c = uv - 0.5;',
+    '  c = mat2(cs, -sn, sn, cs) * c;',
+    '  vec2 disp = uRig + uPar * dw * 2.2;',
+    '  vec2 uvD = (c - disp) * uZoom + 0.5;',
+    '  vec3 col = texture2D(uTex, clamp(uvD, 0.0015, 0.9985)).rgb;',
+    '  gl_FragColor = vec4(col, 1.0);',
     '}'
   ].join('\n');
 
@@ -60,10 +68,7 @@
     var s = gl.createShader(type);
     gl.shaderSource(s, src);
     gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-      failReason = 'shader: ' + gl.getShaderInfoLog(s);
-      return null;
-    }
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { failReason = 'shader: ' + gl.getShaderInfoLog(s); return null; }
     return s;
   }
 
@@ -81,28 +86,36 @@
   function init(canvas) {
     canvasRef = canvas;
     try {
-      gl = canvas.getContext('webgl2', {
-        alpha: false, antialias: false, depth: false, stencil: false,
-        powerPreference: 'high-performance', preserveDrawingBuffer: false
-      });
+      // The 2D context is already owned by app.js on #stage. WebGL contexts
+      // cannot share a canvas with 2D — so we render on our own canvas that
+      // sits behind the overlay and REPLECES the stage visually.
+      var host = canvas.parentNode || win.document.body;
+      var glc = win.document.createElement('canvas');
+      glc.id = 'stage-gl';
+      glc.style.position = 'absolute';
+      glc.style.inset = '0';
+      glc.style.width = '100%';
+      glc.style.height = '100%';
+      glc.style.zIndex = '1';
+      // append AFTER #stage so the GL canvas paints over it (same z-index 0)
+      host.appendChild(glc);
+      // feed sizing from the stage element
+      syncSize();
+      gl = glc.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, powerPreference: 'high-performance' });
+      glCanvas = glc;
     } catch (e) { gl = null; }
     if (!gl) { failReason = 'webgl2 unavailable'; return false; }
 
     var vs = compile(gl.VERTEX_SHADER, VERT);
     var fs = compile(gl.FRAGMENT_SHADER, FRAG);
     if (!vs || !fs) return false;
-
     prog = gl.createProgram();
     gl.attachShader(prog, vs);
     gl.attachShader(prog, fs);
     gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-      failReason = 'link: ' + gl.getProgramInfoLog(prog);
-      return false;
-    }
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { failReason = 'link: ' + gl.getProgramInfoLog(prog); return false; }
     gl.useProgram(prog);
 
-    // fullscreen triangle strip
     var buf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
@@ -112,43 +125,41 @@
 
     uni.uTex = gl.getUniformLocation(prog, 'uTex');
     uni.uDepth = gl.getUniformLocation(prog, 'uDepth');
-    uni.uShift = gl.getUniformLocation(prog, 'uShift');
+    uni.uRig = gl.getUniformLocation(prog, 'uRig');
+    uni.uPar = gl.getUniformLocation(prog, 'uPar');
+    uni.uRot = gl.getUniformLocation(prog, 'uRot');
     uni.uZoom = gl.getUniformLocation(prog, 'uZoom');
 
     texColor = makeTex(gl.TEXTURE0);
     texDepth = makeTex(gl.TEXTURE1);
     gl.uniform1i(uni.uTex, 0);
     gl.uniform1i(uni.uDepth, 1);
-
     active = true;
+    if (win.console && win.console.info) win.console.info('[stealth-3d] v2 depth camera LIVE');
     return true;
   }
 
-  var lastColorSrc = null, lastDepthSrc = null;
   function setFrame(rgbImg, depthImg) {
-    if (!active || !rgbImg || !depthImg || !rgbImg.naturalWidth || !depthImg.naturalWidth) return false;
-    if (rgbImg !== lastColorSrc || depthImg !== lastDepthSrc) {
-      gl.bindTexture(gl.TEXTURE_2D, texColor);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rgbImg);
-      gl.bindTexture(gl.TEXTURE_2D, texDepth);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, depthImg.naturalWidth, depthImg.naturalHeight, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, null); /* placeholder; replaced below */
-      // 16-bit PNG -> browsers give a 2-octet-per-channel Image; safest path is an
-      // offscreen 8-bit downcast at load time (done in app.js before calling us).
-      // So depth texture upload here expects an 8-bit grayscale Image:
-      lastColorSrc = rgbImg;
-      lastDepthSrc = depthImg;
-      frameW = rgbImg.naturalWidth; frameH = rgbImg.naturalHeight;
-      return true;
-    }
+    if (!active || !rgbImg || !depthImg) return false;
+    if (rgbImg === lastColor && depthImg === lastDepth) return true;
+    gl.bindTexture(gl.TEXTURE_2D, texColor);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rgbImg);
+    gl.bindTexture(gl.TEXTURE_2D, texDepth);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, gl.LUMINANCE, gl.UNSIGNED_BYTE, depthImg);
+    lastColor = rgbImg;
+    lastDepth = depthImg;
     return true;
   }
 
-  function render(sx, sy, zoom) {
+  function render(cam) {
     if (!active) return false;
-    gl.viewport(0, 0, canvasRef.width, canvasRef.height);
-    gl.uniform2f(uni.uShift, sx, sy);
-    gl.uniform1f(uni.uZoom, zoom || 1.0);
+    if (!glCanvas || glCanvas.width !== canvasRef.width || glCanvas.height !== canvasRef.height) syncSize();
+    gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+    gl.uniform2f(uni.uRig, cam.rigX || 0, cam.rigY || 0);
+    gl.uniform2f(uni.uPar, cam.parX || 0, cam.parY || 0);
+    gl.uniform1f(uni.uRot, cam.rot || 0);
+    gl.uniform1f(uni.uZoom, cam.zoom || 1.08);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     return true;
   }
@@ -156,12 +167,5 @@
   function isActive() { return active; }
   function fail() { return failReason; }
 
-  win.Stealth3D = {
-    init: init,
-    setFrame: setFrame,
-    render: render,
-    isActive: isActive,
-    failReason: fail,
-    version: '1.1'
-  };
+  win.Stealth3D = { init: init, setFrame: setFrame, render: render, isActive: isActive, failReason: fail, version: '2.0' };
 })(window);

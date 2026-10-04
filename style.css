@@ -106,6 +106,19 @@ a:focus-visible {
   pointer-events: none;
 }
 
+/* WebGL2 3D layer: injected by stealth3d.js, ABOVE the 2D stage; when the
+   3D layer is live it paints every frame, and the 2D canvas stops updating
+   (app.js skips paintFilm draws) — no double-render cost either way. */
+#stage-gl {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;         /* same layer as #stage; later-in-DOM => paints on top */
+  display: block;
+  pointer-events: none;
+}
+
 /* ---------- fixed cinematic vignette over the film ---------- */
 body::after {
   content: "";
