@@ -73,9 +73,14 @@
   function cutWidth() {
     return (win.innerWidth || doc.documentElement.clientWidth || 1024) < 760 ? 'm' : '';
   }
+  /* Asset host: ALL heavy assets (reels, depth) live on the GitHub Pages CDN;
+     only the small shell (html/css/js/vendor) ships on Vercel. Still-cut
+     images moved here in the v2 pass — reels were left relative, which 404'd
+     on Vercel (bug caught in the 4D probe). Everything absolute now. */
+  var ASSET_HOST = 'https://maheshkoriacourse.github.io/mustang-stealth-built/';
   var reelDirs = {
-    '':  { A1: ['assets/seq-1', 1,   162], A2: ['assets/seq-2', 1,   162], A3: ['assets/seq-3', 1,   162], A4: ['assets/seq-4', 1,   81], A5: ['assets/seq-4', 81, 81] },
-    'm': { A1: ['assets/seq-1m', 1,  162], A2: ['assets/seq-2m', 1,  162], A3: ['assets/seq-3m', 1,  162], A4: ['assets/seq-4m', 1,   81], A5: ['assets/seq-4m', 81, 81] }
+    '':  { A1: [ASSET_HOST + 'assets/seq-1', 1,   162], A2: [ASSET_HOST + 'assets/seq-2', 1,   162], A3: [ASSET_HOST + 'assets/seq-3', 1,   162], A4: [ASSET_HOST + 'assets/seq-4', 1,   81], A5: [ASSET_HOST + 'assets/seq-4', 81, 81] },
+    'm': { A1: [ASSET_HOST + 'assets/seq-1m', 1,  162], A2: [ASSET_HOST + 'assets/seq-2m', 1,  162], A3: [ASSET_HOST + 'assets/seq-3m', 1,  162], A4: [ASSET_HOST + 'assets/seq-4m', 1,   81], A5: [ASSET_HOST + 'assets/seq-4m', 81, 81] }
   };
   function actSeqs() {
     return reelDirs[cutWidth()];
