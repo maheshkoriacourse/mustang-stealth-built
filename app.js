@@ -139,7 +139,7 @@
      (desktop: 'assets/seq-1' -> depth 'depth/seq-1'; mobile: 'assets/seq-1m'
      -> 'depth/seq-1m'). 16-bit PNGs get downcast to 8-bit grayscale at load. */
   var stillHost = 'https://maheshkoriacourse.github.io/mustang-stealth-built/';
-  var depthDirBase = stillHost + 'assets/depth/';
+  var depthDirBase = stillHost + 'assets/depth/'; // NOTE: served under assets/ — matches deploy bundle
   function depthDirFor(seqDir) {
     // seqDir 'assets/seq-1' | 'assets/seq-1m' -> 'seq-1' | 'seq-1m'
     var m = seqDir.match(/seq-\d+m?$/);
