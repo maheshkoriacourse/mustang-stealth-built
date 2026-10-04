@@ -133,6 +133,23 @@
   var STILLS = ['K2', 'K3', 'K4', 'K5b', 'K6b', 'K6', 'K8']; // reel codes — K1/K5/K7 stay on disk, out of the cut
   function stillPath(code) { return 'https://maheshkoriacourse.github.io/mustang-stealth-built/assets/stills/' + code + '.png'; }
 
+  /* ---------- 3D depth-parallax (STEALTH 3D layer) ----------
+     Depth-Anything-V2 maps ship for every reel frame:
+     assets/depth/cut/seq-N/f_XXXX.png — same cut subdir naming as the RGB cut
+     (desktop: 'assets/seq-1' -> depth 'depth/seq-1'; mobile: 'assets/seq-1m'
+     -> 'depth/seq-1m'). 16-bit PNGs get downcast to 8-bit grayscale at load. */
+  var stillHost = 'https://maheshkoriacourse.github.io/mustang-stealth-built/';
+  var depthDirBase = stillHost + 'assets/depth/';
+  function depthDirFor(seqDir) {
+    // seqDir 'assets/seq-1' | 'assets/seq-1m' -> 'seq-1' | 'seq-1m'
+    var m = seqDir.match(/seq-\d+m?$/);
+    return m ? m[0] : '';
+  }
+  function depthPathForSeq(seqKey, idx) {
+    var seq = ACT_SEQS[seqKey];
+    return depthDirBase + depthDirFor(seq.dir) + '/f_' + padFramesSeq(seq.first + idx) + '.png';
+  }
+
   /* ---------- frame-sequence pool (real Veo frames) ---------- */
 
   function padFramesSeq(n) {
@@ -145,6 +162,7 @@
     return seq.dir + '/f_' + padFramesSeq(seq.first + idx) + '.jpg';
   }
   var seqImages = {};                // seqKey -> [img|null, ...] (null until its preload lands)
+  var depthImages = {};              // seqKey -> [img|null, ...] (8-bit downcast depth png)
   var seqOk = {};                     // act index (1-based) -> true once its reel loads
   function seqFrameImg(actIdx, local) {
     var key = 'A' + actIdx;
@@ -152,6 +170,14 @@
     if (!seq) return null;
     var arr = seqImages[key];
     if (!arr || !arr.length) return null;
+    var i = clamp(Math.round(local * (seq.count - 1)), 0, seq.count - 1);
+    return arr[i] || null;
+  }
+  function depthFrameImg(actIdx, local) {
+    var key = 'A' + actIdx;
+    var arr = depthImages[key];
+    if (!arr || !arr.length) return null;
+    var seq = ACT_SEQS[key];
     var i = clamp(Math.round(local * (seq.count - 1)), 0, seq.count - 1);
     return arr[i] || null;
   }
@@ -227,6 +253,10 @@
     var arr = new Array(seq.count);
     for (var i = 0; i < seq.count; i++) arr[i] = null;
     seqImages[actKey] = arr;
+    // depth maps load lazily behind the cut (same pump, lower priority share)
+    var darr = new Array(seq.count);
+    for (var j = 0; j < seq.count; j++) darr[j] = null;
+    depthImages[actKey] = darr;
     return new Promise(function (resolve) {
       var loaded = 0;
       var next = 0;
@@ -255,7 +285,36 @@
         }
       }
       pump();
+      startDepthStream(actKey, seq, darr); // fire-and-forget; 3D activates as maps land
     });
+  }
+
+  /* depth stream: one map per frame, HALF the RGB parallelism (light on cpu) */
+  function startDepthStream(actKey, seq, darr) {
+    var loaded = 0, next = 0;
+    var PARALLEL = 3;
+    function pump() {
+      while (next < seq.count && next - loaded < PARALLEL) {
+        (function (idx) {
+          var img = new Image();
+          img.decoding = 'async';
+          var done = false;
+          function finish(imgRef) {
+            if (done) return;
+            done = true;
+            darr[idx] = imgRef || null;
+            loaded++;
+            if (loaded < seq.count) pump();
+          }
+          var failsafe = setTimeout(function () { finish(img.complete && img.naturalWidth ? img : null); }, 20000);
+          img.onload = function () { clearTimeout(failsafe); finish(img); };
+          img.onerror = function () { clearTimeout(failsafe); finish(null); };
+          img.src = depthPathForSeq(actKey, idx);
+        })(next);
+        next++;
+      }
+    }
+    pump();
   }
 
   function startSeqPreload() {
@@ -282,6 +341,8 @@
         if (loaderEl) loaderEl.classList.add('is-loaded');
 
         startSeqPreload(); // real Veo reels stream in behind the still cut
+        s3d = init3D() ? win.Stealth3D : null; // WebGL2 depth-parallax when available
+        if (s3d) watchParallax();
         if (!reduceMotion) initSmoothScroll();
         measure();
         paintOnce(); // first true frame behind the fading curtain
@@ -395,6 +456,53 @@
     ctx.restore();
   }
 
+  /* ---------- STEALTH 3D (depth-parallax WebGL2) ---------- */
+  var s3d = null;                    // layer handle when live
+  var last3dKey = null;              // avoid re-uploading the same texture pair
+  var px = 0, py = 0, tx = 0, ty = 0; // eased pointer/gyro offset (-1..1)
+
+  function init3D() {
+    if (reduceMotion) return false;   // calm playback stays 2D
+    if (!win.Stealth3D) return false;
+    var ok = win.Stealth3D.init(canvas);
+    if (!ok) console.warn('[stealth-3d] layer off:', win.Stealth3D.failReason());
+    else console.info('[stealth-3d] depth parallax LIVE');
+    return ok;
+  }
+
+  function draw3D(rgbImg, depthImg) {
+    if (!s3d || !win.Stealth3D.isActive()) return false;
+    if (!depthImg || !depthImg.naturalWidth) return false; // fall back to 2D till maps land
+    if (!win.Stealth3D.setFrame(rgbImg, draw3DDowncast(depthImg))) return false;
+    // pointer/gyro eased toward target (render() runs each ticker)
+    var zoom = 1.045; // hides displaced edge reveal
+    return win.Stealth3D.render(px * 0.022, py * 0.014, zoom);
+  }
+
+  var depth8Cache = new WeakMap();
+  function draw3DDowncast(img) { return img; } // 8-bit pngs ship as grayscale imgs already
+
+  function watchParallax() {
+    // desktop pointer
+    win.addEventListener('pointermove', function (e) {
+      tx = (e.clientX / Math.max(1, win.innerWidth)) * 2 - 1;
+      ty = (e.clientY / Math.max(1, win.innerHeight)) * 2 - 1;
+    }, { passive: true });
+    // mobile gyro (needs https + user gesture on iOS; silent if denied)
+    try {
+      win.addEventListener('deviceorientation', function (e) {
+        if (e.gamma == null || e.beta == null) return;
+        tx = clamp(e.gamma / 30, -1, 1);
+        ty = clamp((e.beta - 45) / 30, -1, 1);
+      }, { passive: true });
+    } catch (err) { /* no gyro */ }
+  }
+
+  function ease3D() {
+    px += (tx - px) * 0.08;
+    py += (ty - py) * 0.08;
+  }
+
   function drawPlaceholder(code, alpha) {
     var inset = Math.round(Math.min(rectW, rectH) * 0.04) + 12;
     ctx.save();
@@ -442,9 +550,11 @@
     var n = codes.length;
 
     // REAL REEL: if this act's frame sequence is ready, it owns the canvas —
-    // scroll maps directly onto 24fps frames (video truth beats any still cut).
+    // STEALTH 3D (WebGL2 depth parallax) preferred; 2D drawRaw as fallback.
     var fimg = seqFrameImg(actIdx + 1, local);
     if (fimg) {
+      var dimg = depthFrameImg(actIdx + 1, local);
+      if (draw3D(fimg, dimg)) return;
       drawRaw(fimg, 1);
       return;
     }
@@ -539,10 +649,21 @@
     curProgress += (targetProgress - curProgress) * clamp(dt * 9, 0, 1);
     if (Math.abs(targetProgress - curProgress) < 0.00008) curProgress = targetProgress;
 
-    var key = [curProgress.toFixed(6), rectW, rectH].join('|');
-    if (key !== renderedKey) {
-      renderedKey = key;
-      paintFilm();
+    // 3D parallax input eases every tick (cheap; also repaints on pointer move)
+    if (s3d) {
+      ease3D();
+      var moved = Math.abs(tx - px) > 0.002 || Math.abs(ty - py) > 0.002;
+      var key = [curProgress.toFixed(6), moved ? 'p' : 's', rectW, rectH].join('|');
+      if (key !== renderedKey) {
+        renderedKey = key;
+        paintFilm();
+      }
+    } else {
+      var key2 = [curProgress.toFixed(6), rectW, rectH].join('|');
+      if (key2 !== renderedKey) {
+        renderedKey = key2;
+        paintFilm();
+      }
     }
 
     updateCopy(curProgress, true);
@@ -662,7 +783,10 @@
     if (cut !== currentCut) {
       // crossed the 760px breakpoint: switch reel cut and re-stream that cut
       currentCut = cut;
-      seqImages = {}; // drop the other cut's frames; reels re-stream on demand
+      seqImages = {};     // drop the other cut's frames; reels re-stream on demand
+      depthImages = {};
+      last3dKey = null;
+      if (s3d) s3d.setFrame = s3d.setFrame; // texture pair re-uploads naturally next frame
       startSeqPreload();
     }
     paintOnce();
