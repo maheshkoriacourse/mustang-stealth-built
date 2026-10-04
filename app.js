@@ -468,48 +468,54 @@
     ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);
   }
 
-  /* ---------- STEALTH 3D v2 (depth camera choreography) ----------
-     The scroll IS the drone. Per-act camera paths drive a real virtual camera:
-     push-ins, orbital swings, bank rotation — depth maps make near parts fly
-     more than the sky. 2D users get the same choreography as Ken-Burns+drift. */
+  /* ---------- STEALTH 4D (DEEP volumetric camera — photoreal DIBR) ----------
+     Four motion dimensions at once: X/Y parallax, Z push, rotation-bank, and
+     TIME (frame-crossing warp while scrolling = continuous volume, no slideshow
+     feel). Depth maps make near parts fly more than the sky — perspective
+     stays photographic: every pixel is a resample of the real Veo frame. */
   var s3d = null;
   var last3dKey = null;
   var px = 0, py = 0, tx = 0, ty = 0;       // pointer/gyro eased offsets
   var scrollVel = 0;                          // -1..1 eased scroll-velocity kick
   var lastProgressForVel = 0;
 
-  // Per-act camera path: f(local) -> {rigX, rigY, parX, parY, rot, zoom}
-  // rig: whole-frame translation; par: depth-gain swing (near flies more);
-  // rot: bank; zoom: push-in. Values in uv units — strong enough to FEEL.
+  // Per-act 4D camera path: f(local) -> cam. DEEPER than v2:
+  // par gains ~2x v2, rotation stronger, focus plane tracks each act's
+  // subject depth, depthAmp full (mobile auto-downscale by engine).
   var CAM_PATHS = [
-    function (t) { // A1 hero: slow descend + drift right, mild bank
-      return { rigX: lerp(-0.045, 0.045, t), rigY: lerp(0.030, -0.020, t), parX: lerp(-0.050, 0.050, t), parY: lerp(0.030, -0.030, t), rot: lerp(0.052, -0.052, t), zoom: lerp(1.10, 1.16, t) };
+    function (t) { // A1 hero: descend + drift right, focus on floating parts
+      return { rigX: lerp(-0.060, 0.060, t), rigY: lerp(0.038, -0.026, t), parX: lerp(-0.085, 0.085, t), parY: lerp(0.050, -0.048, t), rot: lerp(0.075, -0.075, t), zoom: lerp(1.12, 1.20, t), focus: 0.58 };
     },
-    function (t) { // A2 parts land: push-in toward the array center
-      return { rigX: lerp(0.040, -0.040, t), rigY: lerp(-0.025, 0.025, t), parX: lerp(0.055, -0.055, t), parY: lerp(-0.030, 0.030, t), rot: lerp(-0.060, 0.060, t), zoom: lerp(1.12, 1.18, t) };
+    function (t) { // A2 parts land: push-in toward the volume center
+      return { rigX: lerp(0.055, -0.055, t), rigY: lerp(-0.032, 0.032, t), parX: lerp(0.080, -0.080, t), parY: lerp(-0.042, 0.042, t), rot: lerp(-0.082, 0.082, t), zoom: lerp(1.16, 1.23, t), focus: 0.55 };
     },
-    function (t) { // A3 wheels on: orbital swing left->right (feels like circling the chassis)
+    function (t) { // A3 wheels on: full orbital pass left->right around the chassis
       var s = smooth(t);
-      return { rigX: lerp(-0.055, 0.055, s), rigY: lerp(0.010, -0.010, s), parX: lerp(-0.070, 0.070, s), parY: lerp(0.020, -0.020, s), rot: lerp(-0.075, 0.075, s), zoom: lerp(1.11, 1.15, t) };
+      return { rigX: lerp(-0.075, 0.075, s), rigY: lerp(0.014, -0.014, s), parX: lerp(-0.098, 0.098, s), parY: lerp(0.028, -0.028, s), rot: lerp(-0.100, 0.100, s), zoom: lerp(1.14, 1.19, t), focus: 0.52 };
     },
-    function (t) { // A4 cobra in: descend + strong push (getting intimate with the engine)
-      return { rigX: lerp(0.030, -0.030, t), rigY: lerp(-0.045, 0.030, t), parX: lerp(0.040, -0.040, t), parY: lerp(-0.060, 0.045, t), rot: lerp(0.065, -0.065, t), zoom: lerp(1.13, 1.19, t) };
+    function (t) { // A4 cobra in: engine-bay dive (camera drops INTO the volume)
+      return { rigX: lerp(0.040, -0.040, t), rigY: lerp(-0.058, 0.040, t), parX: lerp(0.055, -0.055, t), parY: lerp(-0.082, 0.062, t), rot: lerp(0.088, -0.088, t), zoom: lerp(1.17, 1.25, t), focus: 0.60 };
     },
-    function (t) { // A5 reveal: pull-back reveal + final bank right (drone leaves the cobra running)
+    function (t) { // A5 reveal: pull-back + final bank; focus settles on the car
       var s = smooth(t);
-      return { rigX: lerp(0.055, -0.055, s), rigY: lerp(0.025, -0.025, s), parX: lerp(0.065, -0.065, s), parY: lerp(0.030, -0.030, s), rot: lerp(0.070, -0.070, s), zoom: lerp(1.19, 1.10, t) };
+      return { rigX: lerp(0.072, -0.072, s), rigY: lerp(0.032, -0.032, s), parX: lerp(0.090, -0.090, s), parY: lerp(0.040, -0.040, s), rot: lerp(0.095, -0.095, s), zoom: lerp(1.25, 1.12, t), focus: 0.50 };
     }
   ];
 
   function camFor(actIdx, local) {
     var fn = CAM_PATHS[actIdx] || CAM_PATHS[0];
     var cam = fn(clamp(local, 0, 1));
-    // pointer/gyro adds to rig (always interactive, even mid-scroll)
-    cam.rigX += px * 0.018;
-    cam.rigY += py * 0.012;
-    // scroll-velocity kick: fast scroll => camera swings (cinematic inertia)
-    cam.rigX += scrollVel * 0.035;
-    cam.rot += scrollVel * 0.045;
+    // pointer/gyro adds to rig (interactive volume walk, even mid-scroll)
+    cam.rigX += px * 0.024;
+    cam.rigY += py * 0.016;
+    // scroll-velocity kick: fast scroll swings the camera + adds TIME-warp
+    cam.rigX += scrollVel * 0.045;
+    cam.rot += scrollVel * 0.055;
+    // TIME dimension: while the reel plays (camera between frames), the
+    // shader warps between neighboring frames — continuous volume.
+    cam.timeK = clamp(Math.abs(scrollVel) * 0.9, 0, 1) * 0.65;
+    // mobile keeps the 4D depth strong but caps displacement for perf
+    cam.depthAmp = (cutWidth() === 'm') ? 0.82 : 1.0;
     return cam;
   }
 

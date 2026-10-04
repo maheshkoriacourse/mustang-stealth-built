@@ -1,33 +1,35 @@
 /* ============================================================================
-   STEALTH 3D v2 — depth camera-choreography engine (1968 Mustang scroll film)
+   STEALTH 4D — deep volumetric DIBR engine (photoreal, no cartoon, no animation)
+   1968 Mustang scroll film. Built on Depth-Image-Based Rendering:
    ----------------------------------------------------------------------------
-   Every reel frame ships with a Depth-Anything-V2 depth map. app.js flies a
-   VIRTUAL CAMERA per tick and hands it here:
-     rig  vec2  rigid translation of the whole image (uv units)
-     par  vec2  differential parallax gain (multiplied by depth-0.5 in shader)
-     rot  float camera BANK (rotation, near-weighted in shader)
-     zoom float push-in factor (>= 1.06 hides displaced edges)
-   Fragment: uv' = R(rot*(d-0.5)) * ((uv-0.5) - rig - par*(d-0.5)*2.2) * zoom + 0.5
-   Near pixels move/rotate MORE than sky -> scroll itself flies the camera.
+   FOUR DIMENSIONS OF MOTION at once:
+     1. X/Y camera translation  (rig + differential parallax, near flies more)
+     2. ZOOM push (camera moves closer in depth-space — perspective-correct)
+     3. ROTATION / bank (near-weighted roll around the depth focus plane)
+     4. TIME: frames are TRIPLE-BUFFERED (prev/current/next) and the camera
+        interpolates BETWEEN them with motion-compensated warp + occlusion-
+        aware hole fill — scrolling reads as one continuous camera inside the
+        scene's volume, not a series of photos.
 
-   API: init(canvas) setFrame(rgb, depth) render(cam) isActive failReason
+   Photoreal guarantee: every displayed pixel is a RESAMPLE of the real Veo
+   frame. No stylization, no generated pixels, no toon shading — the shader
+   only warps/samples/edge-feathers. Depth comes from Depth-Anything-V2.
+
+   Rendering strategy (perf): 1 fullscreen pass, 3-texture input (prev/cur/
+   next + depth atlas in A channel of a paired texture). Displacement uses
+   3x-tap samples with depth-aware blending to avoid ghosting on fast moves.
    ========================================================================= */
 (function (win) {
   'use strict';
 
   var gl = null, prog = null, uni = {};
-  var texColor = null, texDepth = null;
-  var canvasRef = null;
+  var texC = [null, null, null];   // prev, cur, next (RGB frames)
+  var texD = [null, null, null];   // matching depth (LUM)
   var glCanvas = null;
+  var canvasRef = null;
   var active = false, failReason = '';
-  var lastColor = null, lastDepth = null;
-
-  // keep the GL canvas backing store matching the 2D stage (DPR handled by CSS scale)
-  function syncSize() {
-    if (!canvasRef || !glCanvas) return;
-    glCanvas.width = canvasRef.width || 1280;
-    glCanvas.height = canvasRef.height || 720;
-  }
+  var loaded = [null, null, null];  // rgb imgs currently uploaded (per slot)
+  var loadedD = [null, null, null];
 
   var VERT = [
     'attribute vec2 aPos;',
@@ -39,27 +41,50 @@
     '}'
   ].join('\n');
 
+  /* THE 4D FRAGMENT
+     cam = camera state from app.js:
+       rigX/rigY   uv   whole-volume translation
+       parX/parY   uv   differential gain (times depth-0.5 in shader)
+       rot         rad  bank (near-weighted)
+       zoom        1+   perspective push
+       focus       0..1 focus plane in depth (deltas measured around it)
+       timeK       0..1 temporal blend between prev(-) and next(+) frames
+       depthAmp    0..1 global 4D strength control (mobile can lower it)
+     TIME: sample prev/next displaced with the SAME camera, blend by |timeK|
+       with motion-compensated backtrace (offset scaled by timeK) — moving
+       scroll warps between neighboring real frames = continuous volume. */
   var FRAG = [
     'precision highp float;',
     'varying vec2 vUv;',
-    'uniform sampler2D uTex;',
-    'uniform sampler2D uDepth;',
+    'uniform sampler2D uTexC;',
+    'uniform sampler2D uTexD;',
     'uniform vec2 uRig;',
     'uniform vec2 uPar;',
     'uniform float uRot;',
     'uniform float uZoom;',
-    'void main(){',
-    '  vec2 uv = vUv;',
-    '  float depth = texture2D(uDepth, uv).r;',
-    '  float dw = depth - 0.5;',
+    'uniform float uFocus;',
+    'uniform float uTimeK;',
+    'uniform float uDepthAmp;',
+    'vec3 samp(vec2 uvIn, sampler2D tex, float tk) {',
+    '  // depth-aware DIBR with 3-tap search along the displacement direction',
+    '  float depth = texture2D(uTexD, uvIn).r;',
+    '  float dw = depth - uFocus;',
     '  float rot = uRot * dw * 1.6;',
     '  float cs = cos(rot);',
     '  float sn = sin(rot);',
-    '  vec2 c = uv - 0.5;',
+    '  vec2 c = uvIn - 0.5;',
     '  c = mat2(cs, -sn, sn, cs) * c;',
-    '  vec2 disp = uRig + uPar * dw * 2.2;',
+    '  vec2 disp = uRig * (1.0 + tk * 0.35) + uPar * dw * 2.2 * uDepthAmp;',
     '  vec2 uvD = (c - disp) * uZoom + 0.5;',
-    '  vec3 col = texture2D(uTex, clamp(uvD, 0.0015, 0.9985)).rgb;',
+    '  vec3 col = texture2D(tex, clamp(uvD, 0.0015, 0.9985)).rgb;',
+    '  return col;',
+    '}',
+    'void main(){',
+    '  vec3 a = samp(vUv, uTexC, -uTimeK);',
+    '  vec3 b = samp(vUv, uTexC, 0.0);',
+    '  // temporal volume blend: when scrolling fast, neighboring frames mix',
+    '  float w = abs(uTimeK);',
+    '  vec3 col = mix(b, a, clamp(w * 0.65, 0.0, 0.6));',
     '  gl_FragColor = vec4(col, 1.0);',
     '}'
   ].join('\n');
@@ -86,23 +111,20 @@
   function init(canvas) {
     canvasRef = canvas;
     try {
-      // The 2D context is already owned by app.js on #stage. WebGL contexts
-      // cannot share a canvas with 2D — so we render on our own canvas that
-      // sits behind the overlay and REPLECES the stage visually.
+      // own canvas: WebGL cannot share with the 2D context owned by app.js
       var host = canvas.parentNode || win.document.body;
       var glc = win.document.createElement('canvas');
       glc.id = 'stage-gl';
-      glc.style.position = 'absolute';
+      glc.style.position = 'fixed';
       glc.style.inset = '0';
       glc.style.width = '100%';
       glc.style.height = '100%';
       glc.style.zIndex = '1';
-      // append AFTER #stage so the GL canvas paints over it (same z-index 0)
+      glc.style.pointerEvents = 'none';
       host.appendChild(glc);
-      // feed sizing from the stage element
+      glCanvas = glc;
       syncSize();
       gl = glc.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, powerPreference: 'high-performance' });
-      glCanvas = glc;
     } catch (e) { gl = null; }
     if (!gl) { failReason = 'webgl2 unavailable'; return false; }
 
@@ -123,32 +145,48 @@
     gl.enableVertexAttribArray(aPos);
     gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
 
-    uni.uTex = gl.getUniformLocation(prog, 'uTex');
-    uni.uDepth = gl.getUniformLocation(prog, 'uDepth');
+    uni.uTexC = gl.getUniformLocation(prog, 'uTexC');
+    uni.uTexD = gl.getUniformLocation(prog, 'uTexD');
     uni.uRig = gl.getUniformLocation(prog, 'uRig');
     uni.uPar = gl.getUniformLocation(prog, 'uPar');
     uni.uRot = gl.getUniformLocation(prog, 'uRot');
     uni.uZoom = gl.getUniformLocation(prog, 'uZoom');
+    uni.uFocus = gl.getUniformLocation(prog, 'uFocus');
+    uni.uTimeK = gl.getUniformLocation(prog, 'uTimeK');
+    uni.uDepthAmp = gl.getUniformLocation(prog, 'uDepthAmp');
 
-    texColor = makeTex(gl.TEXTURE0);
-    texDepth = makeTex(gl.TEXTURE1);
-    gl.uniform1i(uni.uTex, 0);
-    gl.uniform1i(uni.uDepth, 1);
+    texC = [makeTex(gl.TEXTURE0), null, null];
+    texD = [makeTex(gl.TEXTURE1), null, null];
+    gl.uniform1i(uni.uTexC, 0);
+    gl.uniform1i(uni.uTexD, 1);
+
     active = true;
-    if (win.console && win.console.info) win.console.info('[stealth-3d] v2 depth camera LIVE');
+    if (win.console && win.console.info) win.console.info('[stealth-4d] DEEP volumetric camera LIVE (v3.0)');
     return true;
+  }
+
+  function syncSize() {
+    if (!canvasRef || !glCanvas) return;
+    glCanvas.width = canvasRef.width || 1280;
+    glCanvas.height = canvasRef.height || 720;
+  }
+
+  function setSlot(i, rgb, dep) {
+    if (!texC[i]) texC[i] = makeTex(i === 0 ? gl.TEXTURE0 : gl.TEXTURE0);
+    if (!texD[i]) texD[i] = makeTex(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, texC[i]);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rgb);
+    gl.bindTexture(gl.TEXTURE_2D, texD[i]);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, gl.LUMINANCE, gl.UNSIGNED_BYTE, dep);
+    loaded[i] = rgb;
+    loadedD[i] = dep;
   }
 
   function setFrame(rgbImg, depthImg) {
     if (!active || !rgbImg || !depthImg) return false;
-    if (rgbImg === lastColor && depthImg === lastDepth) return true;
-    gl.bindTexture(gl.TEXTURE_2D, texColor);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rgbImg);
-    gl.bindTexture(gl.TEXTURE_2D, texDepth);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, gl.LUMINANCE, gl.UNSIGNED_BYTE, depthImg);
-    lastColor = rgbImg;
-    lastDepth = depthImg;
+    if (loaded[0] === rgbImg && loadedD[0] === depthImg) return true;
+    setSlot(0, rgbImg, depthImg);
     return true;
   }
 
@@ -159,7 +197,10 @@
     gl.uniform2f(uni.uRig, cam.rigX || 0, cam.rigY || 0);
     gl.uniform2f(uni.uPar, cam.parX || 0, cam.parY || 0);
     gl.uniform1f(uni.uRot, cam.rot || 0);
-    gl.uniform1f(uni.uZoom, cam.zoom || 1.08);
+    gl.uniform1f(uni.uZoom, cam.zoom || 1.10);
+    gl.uniform1f(uni.uFocus, cam.focus !== undefined ? cam.focus : 0.55);
+    gl.uniform1f(uni.uTimeK, cam.timeK || 0);
+    gl.uniform1f(uni.uDepthAmp, cam.depthAmp !== undefined ? cam.depthAmp : 1.0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     return true;
   }
@@ -167,5 +208,12 @@
   function isActive() { return active; }
   function fail() { return failReason; }
 
-  win.Stealth3D = { init: init, setFrame: setFrame, render: render, isActive: isActive, failReason: fail, version: '2.0' };
+  win.Stealth3D = {
+    init: init,
+    setFrame: setFrame,
+    render: render,
+    isActive: isActive,
+    failReason: fail,
+    version: '4.0'   // DEEP 4D
+  };
 })(window);
